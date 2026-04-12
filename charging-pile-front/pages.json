@@ -1,0 +1,30 @@
+{
+	 "pages": [
+	     {
+	       "path": "pages/coupon/coupon",
+	       "style": {
+	         "navigationBarTitleText": "充电优惠券"
+	       }
+	     },
+	     {
+	       "path": "pages/coupon-detail/coupon-detail",
+	       "style": {
+	         "navigationBarTitleText": "优惠券详情"
+	       }
+	     },
+	     // 其他页面配置...
+		 {
+			 "path": "pages/index/index",
+			 "style": {
+			 	"navigationBarTitleText": "首页"
+			 }
+		 }
+	   ],
+	"globalStyle": {
+		"navigationBarTextStyle": "black",
+		"navigationBarTitleText": "uni-app",
+		"navigationBarBackgroundColor": "#F8F8F8",
+		"backgroundColor": "#F8F8F8"
+	},
+	"uniIdRouter": {}
+}
