@@ -1,33 +1,40 @@
 package itheima.service.impl;
-
+import com.baomidou.mybatisplus.core.toolkit.IdWorker;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import itheima.mapper.CouponMapper;
 import itheima.service.ICouponService;
-import itheima.vo.CouponVo;
+import itheima.vo.*;
 import itheima.vo.dto.CouponDetailDTO;
 import itheima.vo.dto.CouponListDTO;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.IdGenerator;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
 import com.github.benmanes.caffeine.cache.Cache;
 
 import java.util.Collections;
+import java.util.Date;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @Slf4j
 @Service
-public class CouponServiceImpl implements ICouponService {
+public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implements ICouponService{
     @Resource
+    private RedisScript<Long> redisScript;
+    @Autowired
     private RedissonClient redissonClient;
-    @Resource
+    @Autowired
     private Cache<String, Object> caffeineCache;
     private final CouponMapper couponMapper;
     private final RedisTemplate<String, Object> redisTemplate;
@@ -218,6 +225,90 @@ public class CouponServiceImpl implements ICouponService {
             return couponMapper.selectByCategoryId(id);
         }
     }
+
+    /**
+     * 购买接口
+     * @param categoryId
+     * @return
+     */
+    @Override
+    public Long buyCoupon(int categoryId) {
+        UserInfo userInfo = getUserInfo();
+        log.info("【购买优惠券】用户信息：{}", userInfo);
+        //1.判断用户是否已经下过订单
+        //2.查询优惠券信息--库存是否充足
+          //2.1查询优惠券信息
+        CouponW couponW = couponMapper.selectById(categoryId);
+          //2.2判断库存是否充足
+        if (couponW.getRemainCount() <= 0) {
+            log.error("【购买优惠券】库存不足， categoryId: {}", categoryId);
+            return null;
+        }
+        //3.创建订单，扣除库存，返回订单id
+        decrStockCount(categoryId);
+        OrderInfo orderInfo = buildOrderInfo(userInfo, couponW);
+        return orderInfo.getOrderId();
+    }
+
+    /**
+     * 生成订单
+     * @return
+     */
+    private OrderInfo buildOrderInfo(UserInfo userInfo, CouponW couponW) {
+        OrderInfo orderInfo = new OrderInfo();
+        orderInfo.setUserPhone(userInfo.getPhone());
+        orderInfo.setOrderPrice(couponW.getPrice());
+        orderInfo.setCategoryId(couponW.getCategoryId());
+        orderInfo.setOrderId(IdWorker.getId());
+        orderInfo.setOrderTime(new Date());
+        orderInfo.setUserName(userInfo.getUsername());
+        return orderInfo;
+    }
+
+    // TODO 获取用户信息
+    /**
+     * 错误的---应该由token获取
+     */
+    private static UserInfo getUserInfo() {
+        UserInfo userInfo = new UserInfo();
+        userInfo.setPhone(18265958585L);
+        userInfo.setUsername("user");
+        userInfo.setPassword("password");
+        return userInfo;
+    }
+
+    /**
+     * 扣减库存
+     */
+    @CacheEvict(key = "'coupons:detail:' + #categoryId" )
+    public void decrStockCount(int categoryId) {
+        // 获取分布式锁
+        String key = "seckill:coupon:stockdecr" + categoryId;
+        try {
+            int count = 0;
+            long ret = 0;
+            do{
+                 ret = redisTemplate.execute(redisScript, Collections.singletonList(key), 1, 10);
+                 if (ret > 1){
+                     break;
+                 }
+                 count++;
+                 if (count >= 3){
+                     log.error("【购买优惠券获取分布式锁失败，达到最大重试次数】");
+                     return;
+                 }
+                 Thread.sleep(20);
+             }while (true);
+
+            couponMapper.decrStockCount(categoryId);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        } finally {
+            redisTemplate.delete(key);
+        }
+    }
+
+
     // TODO 更新优惠券接口，如更新优惠券状态、删除优惠券等
 
 

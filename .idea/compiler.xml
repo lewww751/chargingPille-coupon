@@ -2,12 +2,19 @@
 <project version="4">
   <component name="CompilerConfiguration">
     <annotationProcessing>
+      <profile default="true" name="Default" enabled="true" />
       <profile name="Maven default annotation processors profile" enabled="true">
         <sourceOutputDir name="target/generated-sources/annotations" />
         <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
         <outputRelativeToContentRoot value="true" />
+        <module name="charge-user" />
         <module name="shop-parent" />
+        <module name="charge-order" />
+        <module name="charge-couponerver" />
         <module name="frontend-server" />
+        <module name="charge-gateway" />
+        <module name="charge-common" />
+        <module name="charge-feign-api" />
       </profile>
     </annotationProcessing>
   </component>

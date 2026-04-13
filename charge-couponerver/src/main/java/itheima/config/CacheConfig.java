@@ -5,8 +5,11 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
 
@@ -56,4 +59,15 @@ public class CacheConfig {
         template.afterPropertiesSet();
         return template;
     }
+    /**
+     * lua脚本配置
+     */
+    @Bean
+    public RedisScript<Integer> redisScript() {
+        DefaultRedisScript<Integer> script = new DefaultRedisScript<>();
+        script.setLocation(new ClassPathResource("META-INF/scripts/redis_lock_lua.lua"));
+        script.setResultType(Integer.class);
+        return script;
+    }
+
 }

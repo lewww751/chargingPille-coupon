@@ -3,15 +3,14 @@ package itheima.controller;
 
 import itheima.result.Result;
 import itheima.service.ICouponService;
+import itheima.vo.CouponBuyReq;
 import itheima.vo.CouponVo;
 import itheima.vo.dto.CouponDetailDTO;
 import itheima.vo.dto.CouponListDTO;
+import jdk.jfr.Category;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 @Slf4j
@@ -40,5 +39,15 @@ public class CouponController {
         CouponDetailDTO couponDetail = ICouponService.getCouponDetail(id);
         log.info("【/home/detail运行完毕】couponDetail:{}", couponDetail);
         return Result.ok(couponDetail);
+    }
+
+    /**
+     * 购买接口
+     */
+    @PostMapping("/coupon/pay")
+    public Result<?> buyCoupon(@RequestBody int category) {
+        Long orderNo =  ICouponService.buyCoupon(category);
+        log.info("【/home/buy运行完毕】");
+        return Result.ok(orderNo);
     }
 }
