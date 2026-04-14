@@ -10,6 +10,7 @@ import itheima.vo.dto.CouponListDTO;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.io.filefilter.SymbolicLinkFileFilter;
 import org.redisson.api.IdGenerator;
 import org.redisson.api.RBloomFilter;
 import org.redisson.api.RLock;
@@ -21,10 +22,13 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
 import com.github.benmanes.caffeine.cache.Cache;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Collections;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -34,6 +38,13 @@ import java.util.stream.Stream;
 @Slf4j
 @Service
 public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implements ICouponService{
+    /**
+     * 买完的标识
+     */
+    private static final Map<Long,Boolean> STOCK_OVER_FLOW_MAP = new ConcurrentHashMap<>();
+
+
+
     private final ScheduledExecutorService scheduledExecutorService;
 
     @Resource
@@ -255,11 +266,16 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implem
      * @param categoryId
      * @return
      */
+    @Transactional(rollbackFor = Exception.class)
     @Override
     public Long buyCoupon(int categoryId) {
         UserInfo userInfo = getUserInfo();
         log.info("【购买优惠券】用户信息：{}", userInfo);
         //1.判断用户是否已经下过订单
+        if (couponMapper.existsOrderByUserId(userInfo.getPhone())) {
+            log.error("【购买优惠券】【用户已经下过订单，不能重复购买】");
+            return null;
+        }
         //2.查询优惠券信息--库存是否充足
           //2.1查询优惠券信息
         CouponW couponW = couponMapper.selectById(categoryId);
@@ -272,6 +288,67 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implem
         decrStockCount(categoryId);
         OrderInfo orderInfo = buildOrderInfo(userInfo, couponW);
         return orderInfo.getOrderId();
+    }
+
+    /**
+     * 购买接口V2--------乐观锁
+     * @param category
+     * @return
+     */
+    @Transactional(rollbackFor = Exception.class)
+//    @CacheEvict(key = "'coupons:detail:' + #category" )
+    @Override
+    public Long buyCouponV2(int category) {
+        Boolean isDone = STOCK_OVER_FLOW_MAP.get((long) category);
+        if (isDone != null && isDone) {
+            log.error("【购买优惠券】库存不足， categoryId: {}", category);
+            return null;
+        }
+        CouponW couponW = couponMapper.selectById(category);
+        UserInfo userInfo = getUserInfo();
+        log.info("【购买优惠券】用户信息：{}", userInfo);
+        //1.判断用户是否已经下过订单
+        String userOrderFlag = "seckill:user:order:" + userInfo.getPhone();
+        Long isOrdered = redisTemplate.opsForHash().increment(userOrderFlag, userInfo.getPhone() + "", 1);
+        if (isOrdered <= 1){
+            log.error("【购买优惠券】【用户已经下过订单，不能重复购买】");
+            return null;
+        }
+//        if (couponMapper.existsOrderByUserId(userInfo.getPhone())) {
+//            log.error("【购买优惠券】【用户已经下过订单，不能重复购买】");
+//            return null;
+//        }
+        try {
+            //判断库存是否充足
+            String hashKey = "seckill:coupons:stock:" + category;
+            Long remain = redisTemplate.opsForHash().increment(hashKey, category + "", -1);
+            if (remain < 0){
+                log.error("【购买优惠券】库存不足， categoryId: {}", category);
+                return null;
+            }
+
+//        //判断库存是否充足
+//        if (couponW.getRemainCount() <= 0) {
+//            log.error("【购买优惠券】库存不足， categoryId: {}", category);
+//            return null;
+//        }
+            decrStockCountv2(category);
+        } catch (Exception e) {
+            //买完的本地标识
+            STOCK_OVER_FLOW_MAP.put((long) category, true);
+            //删除用户重复下单表示
+            redisTemplate.opsForHash().delete(userOrderFlag, userInfo.getPhone() + "");
+            throw new RuntimeException(e);
+        }
+        OrderInfo orderInfo = buildOrderInfo(userInfo, couponW);
+        return orderInfo.getOrderId();
+    }
+    @CacheEvict(key = "'coupons:detail:' + #category" )
+    public void decrStockCountv2(int category) {
+        int row = couponMapper.decrStockCountv2(category);
+        if (row == 0) {
+            log.error("【购买优惠券】库存不足， categoryId: {}", category);
+        }
     }
 
     /**

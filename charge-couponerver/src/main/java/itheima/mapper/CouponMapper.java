@@ -37,7 +37,16 @@ public interface CouponMapper extends BaseMapper<CouponW> {
     /**
      * 扣减库存(乐观锁--剩余量>0)
      */
+    @Update("UPDATE t_coupon SET remain_count = remain_count - 1 WHERE category_id = #{categoryId} ")
+    void decrStockCount(int categoryId);
+    //(乐观锁--剩余量>0)
     @Update("UPDATE t_coupon SET remain_count = remain_count - 1 WHERE category_id = #{categoryId} "+
             "AND remain_count > 0")
-    void decrStockCount(int categoryId);
+    int decrStockCountv2(int category);
+
+    /**
+     * 根据用户手机号查询订单
+     */
+    @Select("SELECT 1 FROM t_order WHERE user_id = #{phone} ORDER BY create_time DESC LIMIT 1")
+    boolean existsOrderByUserId(long phone);
 }
