@@ -25,6 +25,8 @@ import com.github.benmanes.caffeine.cache.Cache;
 import java.util.Collections;
 import java.util.Date;
 import java.util.List;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -32,19 +34,21 @@ import java.util.stream.Stream;
 @Slf4j
 @Service
 public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implements ICouponService{
+    private final ScheduledExecutorService scheduledExecutorService;
 
     @Resource
-    private RedisScript<Long> redisScript;
+    private RedisScript<Boolean> redisScript;
     private final RedissonClient redissonClient;
     private final Cache<String, Object> caffeineCache;
     private final CouponMapper couponMapper;
     private final RedisTemplate<String, Object> redisTemplate;
 
-    public CouponServiceImpl(CouponMapper couponMapper, RedisTemplate<String, Object> redisTemplate, RedissonClient redissonClient, Cache<String, Object> caffeineCache) {
+    public CouponServiceImpl(CouponMapper couponMapper, RedisTemplate<String, Object> redisTemplate, RedissonClient redissonClient, Cache<String, Object> caffeineCache, ScheduledExecutorService scheduledExecutorService) {
         this.couponMapper = couponMapper;
         this.redisTemplate = redisTemplate;
         this.redissonClient = redissonClient;
         this.caffeineCache = caffeineCache;
+        this.scheduledExecutorService = scheduledExecutorService;
     }
 
     /**
@@ -298,18 +302,22 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implem
     }
 
     /**
-     * 扣减库存
+     * 扣减库存-------悲观锁
      */
     @CacheEvict(key = "'coupons:detail:' + #categoryId" )
     public void decrStockCount(int categoryId) {
+        // 拿到分布式唯一线程id
+        String threadId = IdWorker.getId() + "";
+        int timeout = 10;
+        ScheduledFuture<?> future = null;
         // 获取分布式锁
         String key = "seckill:coupon:stockdecr" + categoryId;
         try {
             int count = 0;
-            long ret = 0;
+            Boolean ret ;
             do{
-                 ret = redisTemplate.execute(redisScript, Collections.singletonList(key), 1, 10);
-                 if (ret > 1){
+                 ret = redisTemplate.execute(redisScript, Collections.singletonList(key), threadId, "10");
+                 if (ret != null && ret){
                      break;
                  }
                  count++;
@@ -319,12 +327,31 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implem
                  }
                  Thread.sleep(20);
              }while (true);
-
+            // watchDog 自定续期
+            long delayTime = (long) (timeout * 0.8);
+            future = scheduledExecutorService.scheduleAtFixedRate(() -> {
+                String value = (String) redisTemplate.opsForValue().get(key);
+                if (threadId.equals(value)) {
+                    //续期
+                    redisTemplate.expire(key, delayTime + 2, TimeUnit.SECONDS);
+                    return;
+                }
+                // 如果不存在，停止线程不再执行
+                Thread.currentThread().interrupt();
+            }, delayTime, delayTime, TimeUnit.SECONDS);
             couponMapper.decrStockCount(categoryId);
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            redisTemplate.delete(key);
+            // 停止线程
+            if (future != null){
+                future.cancel(true);
+            }
+            //释放 线程id 相同的锁
+            String value = (String) redisTemplate.opsForValue().get(key);
+            if (value != null && value.equals(threadId)){
+                redisTemplate.delete(key);
+            }
         }
     }
 

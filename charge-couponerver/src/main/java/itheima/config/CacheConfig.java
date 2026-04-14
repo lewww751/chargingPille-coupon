@@ -13,6 +13,8 @@ import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
 
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 @Configuration
@@ -63,11 +65,19 @@ public class CacheConfig {
      * lua脚本配置
      */
     @Bean
-    public RedisScript<Integer> redisScript() {
-        DefaultRedisScript<Integer> script = new DefaultRedisScript<>();
+    public RedisScript<Boolean> redisScript() {
+        DefaultRedisScript<Boolean> script = new DefaultRedisScript<>();
         script.setLocation(new ClassPathResource("META-INF/scripts/redis_lock_lua.lua"));
-        script.setResultType(Integer.class);
+        script.setResultType(Boolean.class);
         return script;
+    }
+
+    /**
+     * 线程池配置
+     */
+    @Bean
+    public ScheduledExecutorService scheduledExecutorService() {
+        return new ScheduledThreadPoolExecutor(10);
     }
 
 }
