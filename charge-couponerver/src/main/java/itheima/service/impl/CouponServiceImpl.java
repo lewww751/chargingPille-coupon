@@ -11,6 +11,7 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.IdGenerator;
+import org.redisson.api.RBloomFilter;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.BeanUtils;
@@ -26,29 +27,30 @@ import java.util.Date;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @Slf4j
 @Service
 public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implements ICouponService{
+
     @Resource
     private RedisScript<Long> redisScript;
-    @Autowired
-    private RedissonClient redissonClient;
-    @Autowired
-    private Cache<String, Object> caffeineCache;
+    private final RedissonClient redissonClient;
+    private final Cache<String, Object> caffeineCache;
     private final CouponMapper couponMapper;
     private final RedisTemplate<String, Object> redisTemplate;
 
-    public CouponServiceImpl(CouponMapper couponMapper, RedisTemplate<String, Object> redisTemplate) {
+    public CouponServiceImpl(CouponMapper couponMapper, RedisTemplate<String, Object> redisTemplate, RedissonClient redissonClient, Cache<String, Object> caffeineCache) {
         this.couponMapper = couponMapper;
         this.redisTemplate = redisTemplate;
+        this.redissonClient = redissonClient;
+        this.caffeineCache = caffeineCache;
     }
 
     /**
      * 应用启动时预热热点数据
      */
     // TODO 预热热点数据，后期用spring框架来完成----->自动根据前一天的数据进行预热，采用定时任务
-
 
     @PostConstruct
     public void warmUpHotData() {
@@ -62,7 +64,13 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implem
                 //转化成DTO
                 List<CouponListDTO> couponListDTOS = convertToDTO(hotCoupons);
                 String jsonStr = objectMapper.writeValueAsString(couponListDTOS);
-                    //  缓存本地数据
+                //缓存布隆过滤器
+                List<Long> categoryIDs = couponListDTOS.stream().map(s -> s.getCategoryId()).collect(Collectors.toList());
+                RBloomFilter<Object> bloomFilter = redissonClient.getBloomFilter("bloom:coupon:category:ids");
+                bloomFilter.tryInit(1000000, 0.01);
+                categoryIDs.forEach(bloomFilter::add);
+                log.info("【缓存布隆过滤器】，共{}条", categoryIDs.size());
+                //  缓存本地数据
                     String HOT_COUPONS_KEY = "coupons:hot:list";//缓存热点数据
                     caffeineCache.put(HOT_COUPONS_KEY, couponListDTOS);
                     //缓存Redis数据
@@ -123,6 +131,12 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implem
                         redisTemplate.opsForValue().set(cacheKey,List.of(),10, TimeUnit.MINUTES);
                         return List.of();
                     }
+                    //布隆过滤器过滤
+                    List<Long> categoryIDs = couponVoList.stream().map(s -> s.getCategoryId()).collect(Collectors.toList());
+                    RBloomFilter<Object> bloomFilter = redissonClient.getBloomFilter("bloom:coupon:category:ids");
+                    bloomFilter.tryInit(1000000, 0.01);
+                    categoryIDs.forEach(bloomFilter::add);
+                    log.info("【缓存布隆过滤器】，共{}条", categoryIDs.size());
                     List<CouponListDTO> couponListDTOS = convertToDTO(couponVoList);
                     redisTemplate.opsForValue().set(cacheKey, couponListDTOS, 10, TimeUnit.MINUTES);
                     caffeineCache.put(cacheKey, couponListDTOS);
@@ -161,6 +175,12 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implem
         String CACHE_UPDATE_LOCK = "coupons:update:lock";
         log.info("【获取优惠券详情】开始");
         String cacheKey = COUPON_CACHE_PREFIX + id;
+        //先在布隆过滤器判断
+        RBloomFilter<Object> bloomFilter = redissonClient.getBloomFilter("bloom:coupon:category:ids");
+        if (!bloomFilter.contains(id)){
+            log.info("【获取优惠券详情】布隆过滤器判断优惠券不存在");
+            return null;
+        }
         //1.先从caffine缓存中获取
         Object couponDetail = caffeineCache.getIfPresent(cacheKey);
         if (couponDetail != null){
