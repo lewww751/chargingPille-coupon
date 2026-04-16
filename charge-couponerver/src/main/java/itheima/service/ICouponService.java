@@ -14,4 +14,6 @@ public interface ICouponService {
 
     Long buyCoupon(int category);
     Long buyCouponV2(int category);
+
+    CouponDetailDTO getCouponDetailNew(Integer id);
 }

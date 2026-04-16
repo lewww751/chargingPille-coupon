@@ -2,6 +2,8 @@ package itheima.service.impl;
 import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import itheima.common.CacheClient;
+import itheima.common.CacheProperties;
 import itheima.mapper.CouponMapper;
 import itheima.service.ICouponService;
 import itheima.vo.*;
@@ -19,25 +21,30 @@ import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
 import com.github.benmanes.caffeine.cache.Cache;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+
+import static itheima.common.consrants.RedisConstant.*;
 
 @Slf4j
 @Service
 public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implements ICouponService{
+    private final CacheProperties cacheProperties;
+    private final StringRedisTemplate RedisTemplate;
+    private final CacheClient cacheClient;
     /**
      * 买完的标识
      */
@@ -54,12 +61,15 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implem
     private final CouponMapper couponMapper;
     private final RedisTemplate<String, Object> redisTemplate;
 
-    public CouponServiceImpl(CouponMapper couponMapper, RedisTemplate<String, Object> redisTemplate, RedissonClient redissonClient, Cache<String, Object> caffeineCache, ScheduledExecutorService scheduledExecutorService) {
+    public CouponServiceImpl(CouponMapper couponMapper, RedisTemplate<String, Object> redisTemplate, RedissonClient redissonClient, Cache<String, Object> caffeineCache, ScheduledExecutorService scheduledExecutorService, StringRedisTemplate RedisTemplate, CacheClient cacheClient, CacheProperties cacheProperties) {
         this.couponMapper = couponMapper;
         this.redisTemplate = redisTemplate;
         this.redissonClient = redissonClient;
         this.caffeineCache = caffeineCache;
         this.scheduledExecutorService = scheduledExecutorService;
+        this.RedisTemplate = RedisTemplate;
+        this.cacheClient = cacheClient;
+        this.cacheProperties = cacheProperties;
     }
 
     /**
@@ -343,6 +353,118 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implem
         OrderInfo orderInfo = buildOrderInfo(userInfo, couponW);
         return orderInfo.getOrderId();
     }
+
+    /**
+     * 查询指定优惠券详情--V2（逻辑过期）（实时热点发现）
+     */
+    // 异步处理线程池（统计和升级）
+    private static final ExecutorService ASYNC_EXECUTOR =
+            new ThreadPoolExecutor(
+                    3, 8, 60, TimeUnit.SECONDS,
+                    new LinkedBlockingQueue<>(200),
+                    r -> {
+                        Thread t = new Thread(r, "product-stat-thread");
+                        t.setDaemon(true);
+                        return t;
+                    }
+            );
+    @Override
+    public CouponDetailDTO getCouponDetailNew(Integer categoryId) {
+        UserInfo userInfo = getUserInfo();
+        //布隆过滤器
+        RBloomFilter<Object> bloomFilter = redissonClient.getBloomFilter("bloom:coupon:category:ids");
+
+        if (!bloomFilter.contains(categoryId)){
+            log.info("【获取优惠券详情】布隆过滤器判断优惠券不存在");
+            return null;
+        }
+
+        //查询
+//        CouponDetailDTO couponDetailDTO = cacheClient.queryWithLogicalExpire(
+//                CACHE_COUPON_KEY,   // key前缀
+//                (long) categoryId,                  // 商品id
+//                CouponDetailDTO.class,       // 返回类型
+//                this::getFromDB,     // DB查询函数
+//                CACHE_COUPON_TTL,   // 逻辑过期时间30分钟
+//                TimeUnit.MINUTES
+//        );
+        ASYNC_EXECUTOR.submit(() -> {
+            try {
+                recordAccess((long) categoryId, (long) userInfo.getPhone());
+                checkAndUpgradeCache((long) categoryId);
+            } catch (Exception e) {
+                log.error("【商品访问活跃度统计】商品访问活跃度统计异常", e);
+            }
+        });
+        // 2. 判断是否热点商品，路由到不同缓存策略
+        if (isHot2Product(categoryId)) {
+            log.debug("分片热点商品，走分片逻辑过期缓存，productId: {}", categoryId);
+            return getFromShardCache(categoryId);
+        } else if (isHot1Product(categoryId)){
+            log.debug("普通热点商品，走普通逻辑过期缓存，productId: {}", categoryId);
+            return getFromNormalCache(categoryId);
+        }else {
+            log.debug("普通商品，走普通缓存，productId: {}", categoryId);
+            return getFromNormal(categoryId);
+        }
+//        if (couponDetailDTO == null){
+//            log.info("【获取优惠券详情】商品未预热，key={}",categoryId);
+//        }
+
+    }
+
+    /**
+     * 从普通缓存中拿到数据
+     * @param categoryId
+     * @return
+     */
+    private CouponDetailDTO getFromNormal(Integer categoryId) {
+        return null;
+    }
+
+    /**
+     * 从普通热点缓存中拿到数据
+     * @param categoryId
+     * @return
+     */
+    private CouponDetailDTO getFromNormalCache(Integer categoryId) {
+        return null;
+    }
+
+    /**
+     * 是否是普通热点商品
+     * @param categoryId
+     * @return
+     */
+    private boolean isHot1Product(Integer categoryId) {
+            return false;
+    }
+
+    /**
+     * 从分片商品中拿到数据
+     * @param categoryId
+     * @return
+     */
+    private CouponDetailDTO getFromShardCache(Integer categoryId) {
+        return null;
+    }
+
+    /**
+     * 是否是分片热点商品
+     * @param categoryId
+     * @return
+     */
+    private boolean isHot2Product(Integer categoryId) {
+        return false;
+    }
+
+    private CouponDetailDTO getFromDB(Long integer) {
+        CouponW couponW = couponMapper.selectById(integer);
+        CouponDetailDTO couponDetailDTO = new CouponDetailDTO();
+        BeanUtils.copyProperties(couponW, couponDetailDTO);
+        return couponDetailDTO;
+    }
+
     @CacheEvict(key = "'coupons:detail:' + #category" )
     public void decrStockCountv2(int category) {
         int row = couponMapper.decrStockCountv2(category);
@@ -447,4 +569,140 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implem
         }).collect(Collectors.toList());
 
     }
+    /**
+     * 记录商品访问（PV + UV）
+     */
+    public void recordAccess(Long productId, Long  userId) {
+        // 获取当前时间窗口（滑动窗口，精确到分钟）
+        String timeWindow = getCurrentTimeWindow();
+
+        CompletableFuture<Void> uvFuture = CompletableFuture.runAsync(
+                () -> recordUV(productId, userId, timeWindow)
+        );
+
+        CompletableFuture.allOf(uvFuture).join();
+    }
+    /**
+     * 记录UV（独立访客数）
+     * 使用HyperLogLog（内存占用极小，允许少量误差）
+     */
+    private void recordUV(Long productId, Long userId, String timeWindow) {
+        // key格式：stat:uv:product:{productId}:{timeWindow}
+        String uvKey = STAT_PRODUCT_UV_KEY + productId + ":" + timeWindow;
+        redisTemplate.opsForHyperLogLog().add(uvKey, userId);
+
+        // 设置过期时间
+        redisTemplate.expire(
+                uvKey,
+                cacheProperties.getStatWindowMinutes() + 5,
+                TimeUnit.MINUTES
+        );
+        log.debug("UV记录，productId: {}, userId: {}", productId, userId);
+    }
+    /**
+     * 获取商品UV（当前时间窗口）
+     */
+    public Long getProductUV(Long productId) {
+        String timeWindow = getCurrentTimeWindow();
+        String uvKey = STAT_PRODUCT_UV_KEY + productId + ":" + timeWindow;
+        return redisTemplate.opsForHyperLogLog().size(uvKey);
+    }
+    /**
+     * 获取当前时间窗口（精确到分钟）
+     */
+    private String getCurrentTimeWindow() {
+        return LocalDateTime.now()
+                .format(DateTimeFormatter.ofPattern("yyyyMMddHHmm"));
+    }
+    /**
+     * 检查并升级缓存（普通 热点 分片热点）
+     */
+    private void checkAndUpgradeCache(Long productId) {
+        // 已经是热点，不重复升级
+//        if (isHotProduct(productId)) {
+//            return;
+//        }
+        Long uv = getProductUV(productId);
+
+        boolean needUpgradeTo1 = uv >= cacheProperties.getUvThreshold();
+
+        if (!needUpgradeTo1) {
+            return;
+        }
+
+        // 获取升级锁，防止多线程重复升级
+        String lockKey = LOCK_UPGRADE_KEY + productId;
+        Boolean locked = redisTemplate.opsForValue()
+                .setIfAbsent(lockKey, "1", 30, TimeUnit.SECONDS);
+
+        if (!Boolean.TRUE.equals(locked)) {
+            return; // 其他线程正在升级
+        }
+
+        try {
+            log.info("商品达到热点阈值，开始升级缓存，productId: {}, UV: {}",
+                    productId, uv);
+            // 查询DB获取最新数据
+            CouponDetailDTO product = getFromDB(productId);
+            if (product == null) {
+                return;
+            }
+            // 写入分片逻辑过期缓存
+            writeShardCache(
+                    productId,
+                    product,
+                    cacheProperties.getHotExpireTime()
+            );
+
+            // 标记为热点商品
+//            statService.markAsHotProduct(productId);
+
+            log.info("缓存升级完成，productId: {} 已升级为热点分片缓存", productId);
+
+        } finally {
+            redisTemplate.delete(lockKey);
+        }
+    }
+    /**
+     * 写入分片缓存
+     * 将同一商品数据复制到多个分片，分散查询压力
+     *
+     * @param productId  商品ID
+     * @param product    商品数据
+     * @param expireTime 逻辑过期时间
+     */
+    public void writeShardCache(Long productId, CouponDetailDTO product, Long expireTime) {
+        int shardCount = cacheProperties.getShardCount();
+        log.info("写入分片缓存，productId: {}, 分片数: {}", productId, shardCount);
+
+        for (int i = 0; i < shardCount; i++) {
+            String shardKey = buildShardKey(productId, i);
+            cacheClient.setWithLogicalExpire(
+                    shardKey,
+                    product,
+                    expireTime,
+                    TimeUnit.MINUTES
+            );
+            log.debug("分片写入完成，key: {}", shardKey);
+        }
+    }
+    /**
+     * 构建分片Key
+     * 格式：cache:shard:product:{productId}:shard{index}
+     */
+    public String buildShardKey(Long productId, int shardIndex) {
+        return CACHE_SHARD_PRODUCT_KEY + productId + ":shard" + shardIndex;
+    }
+    /**
+     * 删除所有分片缓存（数据更新时调用）
+     */
+    public void deleteShardCache(Long productId) {
+        int shardCount = cacheProperties.getShardCount();
+        for (int i = 0; i < shardCount; i++) {
+            String shardKey = buildShardKey(productId, i);
+            redisTemplate.delete(shardKey);
+        }
+        log.info("分片缓存已清除，productId: {}", productId);
+    }
+
 }

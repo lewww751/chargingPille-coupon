@@ -73,7 +73,7 @@ public class CacheConfig {
     }
 
     /**
-     * 线程池配置
+     * 定时任务的线程池配置
      */
     @Bean
     public ScheduledExecutorService scheduledExecutorService() {

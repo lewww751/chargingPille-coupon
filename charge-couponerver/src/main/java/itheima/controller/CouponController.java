@@ -42,6 +42,16 @@ public class CouponController {
     }
 
     /**
+     * 查询优惠券详情信息----改造（逻辑过期）
+     */
+    @GetMapping("/detailimp/{id}")
+    public Result<CouponDetailDTO> getCouponDetailNew(@PathVariable Integer id) {
+        CouponDetailDTO couponDetail = ICouponService.getCouponDetailNew(id);
+        log.info("【/home/detail/new运行完毕】couponDetail:{}", couponDetail);
+        return Result.ok(couponDetail);
+    }
+
+    /**
      * 购买接口
      */
     @PostMapping("/coupon/pay")
