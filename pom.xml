@@ -15,6 +15,7 @@
         <module>charge-feign-api</module>
         <module>charge-gateway</module>
         <module>charge-user</module>
+        <module>websocket-server</module>
     </modules>
 
 <!--    <properties>-->
@@ -158,12 +159,12 @@
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-pool2</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-starter-alibaba-nacos-discovery</artifactId>
+        </dependency>
 
 <!--        &lt;!&ndash; Nacos 注册中心 &ndash;&gt;-->
-<!--        <dependency>-->
-<!--            <groupId>com.alibaba.cloud</groupId>-->
-<!--            <artifactId>spring-cloud-starter-alibaba-nacos-discovery</artifactId>-->
-<!--        </dependency>-->
 
         <!-- OpenFeign -->
         <dependency>

@@ -9,6 +9,7 @@
         <outputRelativeToContentRoot value="true" />
         <module name="charge-user" />
         <module name="shop-parent" />
+        <module name="websocket-server" />
         <module name="charge-order" />
         <module name="charge-couponerver" />
         <module name="frontend-server" />

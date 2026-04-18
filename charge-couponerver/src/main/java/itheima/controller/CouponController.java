@@ -56,8 +56,8 @@ public class CouponController {
      */
     @PostMapping("/coupon/pay")
     public Result<?> buyCoupon(@RequestBody int category) {
-        Long orderNo =  ICouponService.buyCoupon(category);
-        log.info("【/home/buy运行完毕】");
+        String orderNo =  ICouponService.buyCouponV2(category);
+//        log.info("【/home/buy运行完毕】");
         return Result.ok(orderNo);
     }
 }

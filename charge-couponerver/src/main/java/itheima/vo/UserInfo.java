@@ -10,6 +10,6 @@ public class UserInfo{
 
     private String username;
     private String password;
-    private long phone;
+    private Long phone;
     private int age;
 }

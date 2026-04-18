@@ -7,7 +7,7 @@ import java.util.Date;
 
 @Data
 public class OrderInfo {
-    private long orderId;
+    private Long orderId;
     private Date orderTime;
     private BigDecimal orderPrice;
     private long userPhone;

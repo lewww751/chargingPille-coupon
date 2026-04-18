@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import itheima.common.CacheClient;
 import itheima.common.CacheProperties;
 import itheima.mapper.CouponMapper;
+import itheima.mq.DefaultCallBack;
+import itheima.mq.MQConstant;
 import itheima.service.ICouponService;
 import itheima.vo.*;
 import itheima.vo.dto.CouponDetailDTO;
@@ -13,6 +15,7 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.io.filefilter.SymbolicLinkFileFilter;
+import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.redisson.api.IdGenerator;
 import org.redisson.api.RBloomFilter;
 import org.redisson.api.RLock;
@@ -23,6 +26,7 @@ import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
+import org.springframework.stereotype.Component;
 import org.springframework.stereotype.Service;
 import com.github.benmanes.caffeine.cache.Cache;
 import org.springframework.transaction.annotation.Transactional;
@@ -42,6 +46,8 @@ import static itheima.common.consrants.RedisConstant.*;
 @Slf4j
 @Service
 public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implements ICouponService{
+    @Resource
+    private RocketMQTemplate rocketMQTemplate;
     private final CacheProperties cacheProperties;
     private final StringRedisTemplate RedisTemplate;
     private final CacheClient cacheClient;
@@ -308,7 +314,7 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implem
     @Transactional(rollbackFor = Exception.class)
 //    @CacheEvict(key = "'coupons:detail:' + #category" )
     @Override
-    public Long buyCouponV2(int category) {
+    public String buyCouponV2(int category) {
         Boolean isDone = STOCK_OVER_FLOW_MAP.get((long) category);
         if (isDone != null && isDone) {
             log.error("【购买优惠券】库存不足， categoryId: {}", category);
@@ -342,8 +348,15 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implem
 //            log.error("【购买优惠券】库存不足， categoryId: {}", category);
 //            return null;
 //        }
-            decrStockCountv2(category);
+            // 扣减库存,发送MQ
+//            decrStockCountv2(category);
+            rocketMQTemplate.asyncSend(MQConstant.ORDER_PENDING_TOPIC,
+                    new OrderMessage((long) category,userInfo.getPhone(),null)
+                    ,new DefaultCallBack("发送订单MQ"));
+
+
         } catch (Exception e) {
+
             //买完的本地标识
             STOCK_OVER_FLOW_MAP.put((long) category, true);
             //删除用户重复下单表示
@@ -351,8 +364,11 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implem
             throw new RuntimeException(e);
         }
         OrderInfo orderInfo = buildOrderInfo(userInfo, couponW);
-        return orderInfo.getOrderId();
+        return "正在抢票中";
     }
+
+
+
 
     /**
      * 查询指定优惠券详情--V2（逻辑过期）（实时热点发现）
@@ -466,11 +482,16 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implem
     }
 
     @CacheEvict(key = "'coupons:detail:' + #category" )
-    public void decrStockCountv2(int category) {
+    public Long decrStockCountv2(int category) {
         int row = couponMapper.decrStockCountv2(category);
         if (row == 0) {
             log.error("【购买优惠券】库存不足， categoryId: {}", category);
+            return null;
         }
+        CouponW couponW = couponMapper.selectById(category);
+        UserInfo userInfo = getUserInfo();
+        OrderInfo orderInfo = buildOrderInfo(userInfo, couponW);
+        return orderInfo.getOrderId();
     }
 
     /**

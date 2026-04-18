@@ -13,7 +13,7 @@ public interface ICouponService {
     CouponDetailDTO getCouponDetail(Integer id);
 
     Long buyCoupon(int category);
-    Long buyCouponV2(int category);
+    String buyCouponV2(int category);
 
     CouponDetailDTO getCouponDetailNew(Integer id);
 }
