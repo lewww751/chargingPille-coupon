@@ -77,6 +77,9 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implem
         this.cacheClient = cacheClient;
         this.cacheProperties = cacheProperties;
     }
+    public static void deleteKey(String key){
+        STOCK_OVER_FLOW_MAP.remove(Long.valueOf(key));
+    }
 
     /**
      * 应用启动时预热热点数据
@@ -324,7 +327,7 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implem
         UserInfo userInfo = getUserInfo();
         log.info("【购买优惠券】用户信息：{}", userInfo);
         //1.判断用户是否已经下过订单
-        String userOrderFlag = "seckill:user:order:" + userInfo.getPhone();
+        String userOrderFlag = "seckill:user:order:" + couponW.getCategoryId();
         Long isOrdered = redisTemplate.opsForHash().increment(userOrderFlag, userInfo.getPhone() + "", 1);
         if (isOrdered <= 1){
             log.error("【购买优惠券】【用户已经下过订单，不能重复购买】");
@@ -351,19 +354,18 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implem
             // 扣减库存,发送MQ
 //            decrStockCountv2(category);
             rocketMQTemplate.asyncSend(MQConstant.ORDER_PENDING_TOPIC,
-                    new OrderMessage((long) category,userInfo.getPhone(),null)
+                    new OrderMessage((long) category,userInfo.getPhone(),null, null)
                     ,new DefaultCallBack("发送订单MQ"));
 
 
         } catch (Exception e) {
-
             //买完的本地标识
             STOCK_OVER_FLOW_MAP.put((long) category, true);
             //删除用户重复下单表示
             redisTemplate.opsForHash().delete(userOrderFlag, userInfo.getPhone() + "");
             throw new RuntimeException(e);
         }
-        OrderInfo orderInfo = buildOrderInfo(userInfo, couponW);
+        //OrderInfo orderInfo = buildOrderInfo(userInfo, couponW);
         return "正在抢票中";
     }
 
@@ -480,7 +482,7 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implem
         BeanUtils.copyProperties(couponW, couponDetailDTO);
         return couponDetailDTO;
     }
-
+    @Transactional(rollbackFor = Exception.class)
     @CacheEvict(key = "'coupons:detail:' + #category" )
     public Long decrStockCountv2(int category) {
         int row = couponMapper.decrStockCountv2(category);
@@ -524,6 +526,7 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implem
     /**
      * 扣减库存-------悲观锁
      */
+    @Transactional(rollbackFor = Exception.class)
     @CacheEvict(key = "'coupons:detail:' + #categoryId" )
     public void decrStockCount(int categoryId) {
         // 拿到分布式唯一线程id
@@ -726,4 +729,19 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implem
         log.info("分片缓存已清除，productId: {}", productId);
     }
 
+    /**
+     * 下单失败得回补操作
+     * @param orderMessage
+     */
+    public void failedRollBack(OrderMessage orderMessage) {
+        //把redis里的库存数量再查一遍
+        Long stockCount = couponMapper.selectStockById(orderMessage.getCouponId());
+        String hashKey = "seckill:coupons:stock:" + orderMessage.getCouponId();
+        redisTemplate.opsForHash().put(hashKey, orderMessage.getCouponId(), stockCount);
+        //删除本地下过单的标识
+        String userOrderFlag = "seckill:user:order:" + orderMessage.getCouponId();
+        redisTemplate.opsForHash().delete("seckill:users:order:" + orderMessage.getUserPhone());
+        //删除本地数量缓存
+        deleteKey(orderMessage.getCouponId().toString());
+    }
 }

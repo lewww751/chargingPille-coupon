@@ -33,6 +33,9 @@ public class OrderPendingMessageListener implements RocketMQListener<OrderMessag
             //订单创建失败
             orderMQResult.setCode(400);
             orderMQResult.setMsg("订单创建失败");
+            //下单失败得回补操作
+            couponService.failedRollBack(orderMessage);
+
         }finally {
             rocketMQTemplate.asyncSend(MQConstant.ORDER_RESULT_TOPIC, orderMQResult, new DefaultCallBack("发送订单结果MQ"));
         }

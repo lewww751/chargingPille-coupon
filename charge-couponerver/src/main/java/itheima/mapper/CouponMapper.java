@@ -49,4 +49,10 @@ public interface CouponMapper extends BaseMapper<CouponW> {
      */
     @Select("SELECT 1 FROM t_order WHERE user_id = #{phone} ORDER BY create_time DESC LIMIT 1")
     boolean existsOrderByUserId(long phone);
+
+    /**
+     * 根据优惠券id查询库存
+     */
+    @Select("SELECT remain_count FROM t_coupon WHERE category_id = #{couponId}")
+    Long selectStockById(Long couponId);
 }
