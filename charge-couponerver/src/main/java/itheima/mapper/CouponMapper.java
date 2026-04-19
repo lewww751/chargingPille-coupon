@@ -55,4 +55,22 @@ public interface CouponMapper extends BaseMapper<CouponW> {
      */
     @Select("SELECT remain_count FROM t_coupon WHERE category_id = #{couponId}")
     Long selectStockById(Long couponId);
+
+    /**
+     * 修改订单状态
+     * @param orderId
+     * @param statusCancel
+     * @param payTimeOnline
+     * @return
+     */
+    @Update("UPDATE t_order " +
+            "SET status_cancel = #{statusCancel}" +
+            "WHERE order_id = #{orderId} AND status = 0")
+    int changeOrderStatus(Long orderId, String statusCancel, String payTimeOnline);
+    /**
+     * 增加库存
+     * @param couponId
+     * */
+    @Update("UPDATE t_coupon SET remain_count = remain_count + 1 WHERE category_id = #{couponId}")
+    void incrStockCount(Long couponId);
 }

@@ -10,6 +10,8 @@ import org.apache.rocketmq.spring.annotation.RocketMQMessageListener;
 import org.apache.rocketmq.spring.core.RocketMQListener;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.messaging.Message;
+import org.springframework.messaging.support.MessageBuilder;
 
 @RocketMQMessageListener(
         consumerGroup = MQConstant.ORDER_PENDING_CONSUMER,
@@ -29,6 +31,12 @@ public class OrderPendingMessageListener implements RocketMQListener<OrderMessag
             orderMQResult.setOrderId(orderId);
             orderMQResult.setCode(200);
             orderMQResult.setMsg("订单创建成功");
+            //超时订单检查
+            orderMessage.setOrderId(orderId);
+            Message<OrderMessage> build = MessageBuilder.withPayload(orderMessage).build();
+            rocketMQTemplate.asyncSend(MQConstant.ORDER_PAY_TIMEOUT_TOPIC, build,
+                    new DefaultCallBack("发送超时订单检查MQ"),
+                    2000,3);
         } catch (Exception e) {
             //订单创建失败
             orderMQResult.setCode(400);

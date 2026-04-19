@@ -744,4 +744,21 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, CouponW> implem
         //删除本地数量缓存
         deleteKey(orderMessage.getCouponId().toString());
     }
+
+    /**
+     * 超时订单检查
+     * @param orderMessage
+     */
+    public void checkOrderTimeout(OrderMessage orderMessage) {
+        //获取订单状态
+        //检查是否超时
+        // 如果订单状态不是已支付，就需要回滚
+        int row = couponMapper.changeOrderStatus(orderMessage.getOrderId(), "status_cancel","pay_time_online");
+        //Mysql订单回补，数量+1
+        if (row > 0){
+            couponMapper.incrStockCount(orderMessage.getCouponId());
+        }
+        //其他缓存操作
+        this.failedRollBack(orderMessage);
+    }
 }
